@@ -7,11 +7,13 @@ import numpy.linalg as linalg
 import numpy as np
 import re
 import os
+from time import time
 
 from numpy.linalg import norm
 
 __GAMESS__ = "/home/charnley/opt/gamess-mndod/rungms"
-__GAMESS__ = "/home/charnley/dev/2016-mndod/gamess/git-mndod/rungms"
+__GAMESS__ = "/opt/gamess/mndod/rungms"
+__GAMESS__ = "/home/charnley/opt/gamess/mndod-fast/rungms"
 __SCARTCH__ = "scr"
 __GMSSCR__ = "/home/charnley/scr"
 
@@ -46,13 +48,6 @@ def get_atom(atom):
     global __ATOM_LIST__
     atom = atom.lower()
     return __ATOM_LIST__.index(atom) + 1
-
-
-def delete_scr(filename):
-    filename = filename.split(".")[0]
-    filename += "*"
-    os.chdir(__GMSSCR__)
-    os.remove(filename)
 
 
 def get_coordinates_xyz(filename):
@@ -188,8 +183,9 @@ def split_jobs(jobs, workers):
 def energy_worker(i, ids, matoms, mcoordinates, mcharges, parameters, header, energies):
 
     for ii, atoms, coordinates, charge in zip(ids, matoms, mcoordinates, mcharges):
+        start_time = time()
         energies[ii] = get_energy(atoms, coordinates, header, charge, parameters, filename=str(ii))
-        print energies[ii]
+        # print ii, energies[ii], time()-start_time
 
     return
 
@@ -205,6 +201,8 @@ def get_energies(molecules_atoms, molecules_coordinates, molecules_charges, head
     molecules_coordinates = split_jobs(molecules_coordinates, workers)
     molecules_charges = split_jobs(molecules_charges, workers)
 
+    pwd = os.getcwd()
+
     os.chdir(__SCARTCH__)
 
     processes = [mp.Process(target=energy_worker,
@@ -217,39 +215,11 @@ def get_energies(molecules_atoms, molecules_coordinates, molecules_charges, head
     for p in processes: p.start()
     for p in processes: p.join()
 
-    print list(energies)
+    os.chdir(pwd)
+
+    # print list(energies)
 
     return energies
-
-
-def get_jacobian(parameters, dx=0.001, workers=1):
-
-    grad = []
-
-    for i, p in enumerate(parameters):
-        print p
-
-    norm = linalg.norm(gradient)
-
-    return gradient
-
-
-def numerical_jacobian(F, r, h=0.001):
-    """
-    Create Jacobian for function F, using numerical differentiation
-    """
-    n = len(r)
-    J = [[0.0]*n for i in range(n)]
-    for i in range(0, n):
-        r_a = copy.deepcopy(r)
-        r_b = copy.deepcopy(r)
-        r_a[i] = r_a[i] + h
-        r_b[i] = r_b[i] - h
-        f_a = F(r_a)
-        f_b = F(r_b)
-        for j in range(0, n):
-            J[j][i] = (f_a[j] - f_b[j])/(2.0*h)
-    return J
 
 
 
