@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import sys
+import os
 import numpy as np
 import scipy.optimize as opt
 from copy import deepcopy
@@ -25,7 +26,19 @@ def rmsd(V, W):
 
 def main():
 
+    try:
+        # Is this run in a SLURM Enviroment?
+        print os.environ["SLURM_JOB_ID"]
+        print os.environ["SLURM_JOB_NODELIST"]
+
+    except KeyError:
+        pass
+
     args = sys.argv[1:]
+
+    if len(args) == 0:
+        print "nope"
+        quit()
 
     expe_values = args[0] # list of solvation free energies
     exam_subset = args[1] # list of moleculenames
@@ -71,7 +84,9 @@ def main():
         molecules_charges.append(charges[line])
         molecules_references.append(references[line])
 
-        unique_atoms += np.unique(atoms)
+        atoms = np.unique(atoms)
+        atoms = [str(x) for x in atoms] # fixes weird type error
+        unique_atoms += atoms
 
     f.close()
 
@@ -92,6 +107,7 @@ def main():
 
     # define gamess header
     header = """
+
  $system
    mwords=250
  $end
@@ -135,11 +151,17 @@ def main():
         parameters_local = np.zeros((n_atom_types))
         parameters_local[unique_parameters] = parameter_view
 
-        energies = gms.get_energies(molecules_atoms,
+        # energies = gms.get_energies(molecules_atoms,
+        #                    molecules_coordinates,
+        #                    molecules_charges,
+        #                    header,
+        #                    parameters_local, workers=30)
+
+        energies = gms.get_energies_nodes(molecules_atoms,
                            molecules_coordinates,
                            molecules_charges,
                            header,
-                           parameters_local, workers=30)
+                           parameters_local)
 
         energies = np.array(energies)
         ermsd = rmsd(molecules_references, energies)
@@ -175,7 +197,7 @@ def main():
         return gradient
 
 
-    # print energy_rmsd(parameters_optimize)
+    print energy_rmsd(parameters_optimize)
     # print energy_jacobian(parameters_optimize)
 
     # All radii should be positive
@@ -196,13 +218,13 @@ def main():
     #              bounds=bounds,
     #              options={"maxiter": 300, "disp": True, "eps": 0.001})
 
-    print opt.minimize(function_name, parameters_initial,
-                 jac=jacobian_function,
-                 method=method_name,
-                 bounds=bounds,
-                 options={"maxiter": 300, "disp": True, "eps": 0.001})
-
-    print unique_parameters+1
+    # print opt.minimize(function_name, parameters_initial,
+    #              jac=jacobian_function,
+    #              method=method_name,
+    #              bounds=bounds,
+    #              options={"maxiter": 300, "disp": True, "eps": 0.001})
+    #
+    # print unique_parameters+1
 
 if __name__ == "__main__":
     main()

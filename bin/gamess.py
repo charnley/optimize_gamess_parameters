@@ -11,11 +11,17 @@ from time import time
 
 from numpy.linalg import norm
 
+import nodes
+
 __GAMESS__ = "/home/charnley/opt/gamess-mndod/rungms"
 __GAMESS__ = "/opt/gamess/mndod/rungms"
 __GAMESS__ = "/home/charnley/opt/gamess/mndod-fast/rungms"
-__SCARTCH__ = "scr"
+# __GAMESS__ = "/scratch/666/mndod-fast/rungms"
+
+__SCRATCH__ = "scr"
 __GMSSCR__ = "/home/charnley/scr"
+
+__XYZDIR__ = "/home/charnley/dev/2017-mnsol/jobs/xyz/" # sunray
 
 
 global __ATOM_LIST
@@ -156,18 +162,19 @@ def get_energy(atom_list, coordinates, header, charge, parameters, filename="tes
 
     # run the calculation
     cmd = __GAMESS__ + " " + filename + ".inp" + " | grep -A1 \"LEC+CAV+DIS+REP\" "
+
     out = shell(cmd , shell=True)
     numbers = re.findall(r'[-]?\d+\.\d*(?:[Ee][-\+]\d+)?', out)
 
     # clean scratch
     # TODO should be more general
-    shell("rm ~/scr/"+filename+"*", shell=True)
+    shell("rm "+filename+".*", shell=True)
 
     if not len(numbers) > 0:
         return float("nan")
 
     # clear gms tmpfiles
-    os.remove(filename+".inp")
+    # os.remove(filename+".inp")
 
     # get the energy
     energy = float(numbers[-1])
@@ -185,7 +192,7 @@ def energy_worker(i, ids, matoms, mcoordinates, mcharges, parameters, header, en
     for ii, atoms, coordinates, charge in zip(ids, matoms, mcoordinates, mcharges):
         start_time = time()
         energies[ii] = get_energy(atoms, coordinates, header, charge, parameters, filename=str(ii))
-        # print ii, energies[ii], time()-start_time
+        print ii, energies[ii], time()-start_time
 
     return
 
@@ -203,7 +210,7 @@ def get_energies(molecules_atoms, molecules_coordinates, molecules_charges, head
 
     pwd = os.getcwd()
 
-    os.chdir(__SCARTCH__)
+    os.chdir(__SCRATCH__)
 
     processes = [mp.Process(target=energy_worker,
         args=(i, molecules_id[i],
@@ -217,10 +224,70 @@ def get_energies(molecules_atoms, molecules_coordinates, molecules_charges, head
 
     os.chdir(pwd)
 
-    # print list(energies)
-
     return energies
 
+
+def get_energies_nodes(molecules_atoms,
+                       molecules_coordinates,
+                       molecules_charges,
+                       header,
+                       parameters,
+                       workers=1,
+                       node_list=["node634"]):
+
+    n_molecules = len(molecules_atoms)
+    energies = np.zeros(n_molecules)
+
+    PORTNUM = 5000
+    AUTHKEY = "haxorboy"
+    hostname = "sunray"
+
+    manager = nodes.make_server_manager(PORTNUM, AUTHKEY)
+    shared_jobs = manager.get_job_queue()
+    shared_results = manager.get_result_queue()
+
+    chunksize = 60
+
+    for i in range(0, n_molecules, chunksize):
+
+        job_molecules_id = list(range(n_molecules))[i:i + chunksize]
+        job_molecules_atoms = molecules_atoms[i:i + chunksize]
+        job_molecules_coordinates = molecules_coordinates[i:i + chunksize]
+        job_molecules_charges = molecules_charges[i:i + chunksize]
+
+        shared_jobs.put([job_molecules_id,
+                         job_molecules_atoms,
+                         job_molecules_coordinates,
+                         job_molecules_charges,
+                         header,
+                         parameters])
+
+
+    # Start worker nodes
+    slaves = nodes.make_slaves(node_list, hostname, PORTNUM, AUTHKEY, workers=workers)
+
+    for slave in slaves:
+        out = slave.stdout.readline()
+        # out, err = slave.communicate()
+        print out
+        # print err
+
+    numresults = 0
+    resultdict = {}
+
+    while numresults < n_molecules:
+        outdict = shared_results.get()
+        print outdict
+        resultdict.update(outdict)
+        numresults += len(outdict)
+        print "finished calculations", numresults
+
+    nodes.terminate(slaves)
+
+    for i in resultdict:
+        energies[i] = resultdict[i]
+
+    return energies
 
 
 if __name__ == "__main__":
@@ -229,16 +296,41 @@ if __name__ == "__main__":
 
     args = sys.argv[1:]
 
-    xyz_file = args[0]
+    if len(args) == 0:
+        print "test usage:"
+        print "gamess.py xyz_list parameter_file"
+        quit()
+
+    molecules_file = args[0]
     parameter_file = args[1]
 
-    atom_list, coordinates = get_coordinates_xyz(xyz_file)
-
+    # Read parameters for solvent radii
     parameters = []
     f = open(parameter_file)
     for line in f:
         line = float(line)
         parameters.append(line)
+    f.close()
+
+    # Read the molecules from molecule list
+    molecules = [] # names
+    molecules_coordinates = [] # xyz
+    molecules_atoms = [] # atom type
+    molecules_charges = [] # charges
+
+    f = open(molecules_file, 'r')
+    for line in f:
+
+        line = line.replace("\n", "")
+        line = line.split()
+
+        atoms, coordinates = get_coordinates_xyz(__XYZDIR__ + line[0] + '.xyz')
+
+        molecules.append(line[0])
+        molecules_coordinates.append(coordinates)
+        molecules_atoms.append(atoms)
+        molecules_charges.append(line[1])
+
     f.close()
 
     header = """
@@ -275,8 +367,24 @@ if __name__ == "__main__":
  $end
 
 """
-    charge = 0
-    os.chdir(__SCARTCH__)
 
-    print get_energy(atom_list, coordinates, header, charge, parameters)
+    start_time = time()
+
+    # charge = 0
+    # os.chdir(__)
+    # print get_energy(molecules_atoms, molecules_coordinates, header, molecules_charges, parameters)
+
+    # energies = get_energies(molecules_atoms, molecules_coordinates, molecules_charges, header, parameters, workers=1)
+
+    energies = get_energies_nodes(molecules_atoms,
+                       molecules_coordinates,
+                       molecules_charges,
+                       header,
+                       parameters,
+                       workers=8,
+                       node_list=["node634", "node678", "node637", "node662"])
+
+    print energies
+
+    print time() - start_time
 
