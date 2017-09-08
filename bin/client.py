@@ -108,7 +108,7 @@ def start_client(job_queue, result_queue, stay_awake=False, workers=1):
 
             outdict = {key: energy for key, energy in zip(job_molecules_id, energies)}
 
-            time.sleep(1)
+            # time.sleep(1)
 
             result_queue.put(outdict)
 

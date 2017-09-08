@@ -11,6 +11,7 @@ from time import time
 
 from numpy.linalg import norm
 
+import socket
 import nodes
 
 __GAMESS__ = "/home/charnley/opt/gamess-mndod/rungms"
@@ -119,9 +120,18 @@ def generate_rin(atom_list, radius_list):
     header = ""
     fmt = "   rin({}) = {}"
 
-    for i, atom in enumerate(atom_list):
-        idx = get_atom(atom) - 1
-        header += fmt.format(i+1, radius_list[idx]) + "\n"
+    print type(radius_list)
+
+    if type(radius_list) == type(dict()):
+
+        for i, atom in enumerate(atom_list):
+            idx = get_atom(atom)
+            header += fmt.format(i+1, radius_list[idx]) + "\n"
+
+    else: # type list
+        for i, atom in enumerate(atom_list):
+            idx = get_atom(atom) - 1
+            header += fmt.format(i+1, radius_list[idx]) + "\n"
 
     return header
 
@@ -133,51 +143,70 @@ def genereate_data(atom_list, coordinates):
     return header
 
 
-def get_energy(atom_list, coordinates, header, charge, parameters, filename="test"):
+def make_input_file(atoms, coordinates, header, charge, parameters):
 
+    out = ""
     coordinate_line = "{:2s}     {:3d}.0      {:13.10f}    {:13.10f}   {:13.10f}\n"
-
-    # write the input file
-    f = open(filename + ".inp", 'w')
 
     # fix charge
     header = header.replace("icharg=0", "icharg="+str(charge))
 
     # energy model
-    f.write(header + "\n")
+    out += header +"\n"
 
     # radii parameters
-    f.write(" $pcmcav\n")
-    f.write(" \n\n")
-    f.write(generate_rin(atom_list, parameters))
-    f.write(" $end\n\n")
+    out += " $pcmcav\n"
+    out += " \n\n"
+    out += generate_rin(atoms, parameters)
+    out += " $end\n\n"
 
     # Coordinates
-    f.write(" $data\n")
-    f.write("title\nC1\n")
-    for atom, coord in zip(atom_list, coordinates):
-        f.write(coordinate_line.format(atom, get_atom(atom), *coord))
-    f.write(" $end\n")
+    out += " $data\n"
+    out += "title\nC1\n"
+    for atom, coord in zip(atoms, coordinates):
+        out += coordinate_line.format(atom, get_atom(atom), *coord)
+    out += " $end\n"
+
+    return out
+
+
+def get_energy(atom_list, coordinates, header, charge, parameters, filename="test", smd=True):
+
+    # Generate GAMESS header
+    filecontent = make_input_file(atom_list, coordinates, header, charge, parameters)
+
+    # write the input file
+    f = open(filename + ".inp", 'w')
+    f.write(filecontent)
     f.close()
 
     # run the calculation
-    cmd = __GAMESS__ + " " + filename + ".inp" + " | grep -A1 \"LEC+CAV+DIS+REP\" "
+    if smd:
+        cmd = __GAMESS__ + " " + filename + ".inp" + " | grep \"FREE ENERGY OF SOLVATION\" "
+    else:
+        cmd = __GAMESS__ + " " + filename + ".inp" + " | grep -A1 \"LEC+CAV+DIS+REP\" "
 
     out = shell(cmd , shell=True)
     numbers = re.findall(r'[-]?\d+\.\d*(?:[Ee][-\+]\d+)?', out)
+
+    # get the energy
+    if not len(numbers) > 0:
+        energy = float("nan")
+        hostname = socket.gethostname()
+        shell('cp '+filename+'.inp /home/charnley/dev/2017-pcm-parameters/fails/'+hostname+'_'+filename+'.inp', shell=True)
+
+    else:
+        if smd:
+            energy = float(numbers[0])
+        else:
+            energy = float(numbers[-1])
 
     # clean scratch
     # TODO should be more general
     shell("rm "+filename+".*", shell=True)
 
-    if not len(numbers) > 0:
-        return float("nan")
-
     # clear gms tmpfiles
     # os.remove(filename+".inp")
-
-    # get the energy
-    energy = float(numbers[-1])
 
     return energy
 
@@ -233,7 +262,8 @@ def get_energies_nodes(molecules_atoms,
                        header,
                        parameters,
                        workers=1,
-                       node_list=["node634"]):
+                       chunksize = 50,
+                       node_list=["localhost"]):
 
     n_molecules = len(molecules_atoms)
     energies = np.zeros(n_molecules)
@@ -245,8 +275,6 @@ def get_energies_nodes(molecules_atoms,
     manager = nodes.make_server_manager(PORTNUM, AUTHKEY)
     shared_jobs = manager.get_job_queue()
     shared_results = manager.get_result_queue()
-
-    chunksize = 60
 
     for i in range(0, n_molecules, chunksize):
 
@@ -266,10 +294,10 @@ def get_energies_nodes(molecules_atoms,
     # Start worker nodes
     slaves = nodes.make_slaves(node_list, hostname, PORTNUM, AUTHKEY, workers=workers)
 
-    for slave in slaves:
-        out = slave.stdout.readline()
+    # for slave in slaves:
+    #     out = slave.stdout.readline()
         # out, err = slave.communicate()
-        print out
+        # print out
         # print err
 
     numresults = 0
@@ -277,10 +305,8 @@ def get_energies_nodes(molecules_atoms,
 
     while numresults < n_molecules:
         outdict = shared_results.get()
-        print outdict
         resultdict.update(outdict)
         numresults += len(outdict)
-        print "finished calculations", numresults
 
     nodes.terminate(slaves)
 
@@ -290,7 +316,353 @@ def get_energies_nodes(molecules_atoms,
     return energies
 
 
+
+def get_energies_parameters_nodes(molecules_atoms, molecules_coordinates, molecules_charges,
+                header, parameters_list,
+                parameter_index_list=None,
+                workers=1,
+                chunksize=10,
+                node_list=[""]):
+
+
+    n_molecules = len(molecules_atoms)
+    n_parameters = len(parameters_list)
+
+    chunksize = min(chunksize, n_molecules)
+
+
+    energies_list_list = np.zeros((n_molecules, n_parameters))
+    energies_list_list = energies_list_list.flatten()
+    n_jobs = len(energies_list_list)
+
+
+    PORTNUM = 5000
+    AUTHKEY = "haxorboy"
+    hostname = "sunray"
+
+    manager = nodes.make_server_manager(PORTNUM, AUTHKEY)
+    shared_jobs = manager.get_job_queue()
+    shared_results = manager.get_result_queue()
+
+    jobs_idx = list(range(n_jobs))
+
+    print "n_jobs", n_jobs
+
+    print "par * mol", n_parameters, n_molecules, n_parameters * n_molecules
+
+    for j in range(n_parameters):
+
+        parameters = parameters_list[j]
+
+        for i in range(0, n_molecules, chunksize):
+
+            # TODO raisecondiition
+            # should be
+            # to = min(frm+chunksize, (j+1)*n_molcules)
+            frm = j*n_molecules + i
+            to = frm + chunksize
+
+            job_idx_list = jobs_idx[frm:to]
+
+            job_molecules_atoms = molecules_atoms[i:i + chunksize]
+            job_molecules_coordinates = molecules_coordinates[i:i + chunksize]
+            job_molecules_charges = molecules_charges[i:i + chunksize]
+
+            shared_jobs.put([job_idx_list,
+                            job_molecules_atoms,
+                            job_molecules_coordinates,
+                            job_molecules_charges,
+                            header,
+                            parameters])
+
+    # Start worker nodes
+    slaves = nodes.make_slaves(node_list, hostname, PORTNUM, AUTHKEY, workers=workers)
+
+    numresults = 0
+    resultdict = {}
+
+    while numresults < n_jobs:
+        outdict = shared_results.get()
+        resultdict.update(outdict)
+        numresults += len(outdict)
+
+    nodes.terminate(slaves)
+
+    for i in resultdict:
+        energies_list_list[i] = resultdict[i]
+
+    energies_list_list = energies_list_list.reshape((n_parameters, n_molecules))
+
+    return energies_list_list
+
+
+def main():
+
+    import argparse
+    import sys
+
+    description = ""
+
+    parser = argparse.ArgumentParser(
+                    usage='%(prog)s [options]',
+                    description=description,
+                    formatter_class=argparse.RawDescriptionHelpFormatter)
+
+    parser.add_argument('-p', '--parameter', action='store', default='', help='')
+
+    parser.add_argument('-x', '--xyz_file', action='store', default='', help='')
+    parser.add_argument('-c', '--charge', type=int, action='store', default=0, help='')
+
+    parser.add_argument('-l', '--xyz_list', action='store', default='', help='')
+
+    parser.add_argument('-s', '--scan', action='store_true', default=False, help='')
+
+
+    args = parser.parse_args()
+
+    # Read parameters for solvent radii
+    if args.parameter:
+        parameters = []
+        f = open(args.parameter)
+        for line in f:
+            line = line.strip()
+            if line == "": line = "0.0"
+            line = float(line)
+            parameters.append(line)
+
+        f.close()
+    else:
+        parameters = np.zeros(107)
+
+
+    header = """ \
+
+ $system
+   mwords=250
+ $end
+
+ $basis
+    gbasis=PM6
+ $end
+
+ $contrl
+    scftyp=RHF
+    icharg=0
+    runtyp=energy
+ $end
+
+ $scf
+    ! less output
+    npunch=1
+ $end
+
+ $pcm
+    solvnt=WATER
+    mxts=15000
+
+    smd=.t.
+ $end
+
+ $tescav
+    mthall=4
+    ntsall=60
+ $end
+
+
+"""
+
+
+    header = """
+
+ $system
+   mwords=250
+ $end
+
+ $basis
+    gbasis=PM6
+ $end
+
+ $contrl
+    scftyp=RHF
+    icharg=0
+    runtyp=energy
+ $end
+
+ $scf
+    ! less output
+    npunch=1
+ $end
+
+ $pcm
+
+    solvnt=WATER
+
+    ! Calculate the cavitation energy
+    ! ICAV=1
+
+    ! Calculation of dispersion and repulsion free energy
+    ! IDISP=1
+
+    smd=.t.
+
+ $end
+
+
+"""
+
+
+    # generate input file for molecule using specific parameters
+    if args.xyz_file:
+        atoms, coordinates = get_coordinates_xyz(args.xyz_file)
+
+        # test dict
+        # parameters = {}
+        # parameters[1] = 2.0
+        # parameters[6] = 5.0
+        # parameters[7] = 0.9
+
+        print make_input_file(atoms, coordinates, header, args.charge, parameters)
+        quit()
+
+
+    if args.xyz_list and args.scan:
+
+        charge_file = "/home/charnley/dev/2017-pcm-parameters/lists/mnsol_water.charge"
+        moldb = {}
+        f = open(charge_file, 'r')
+        for line in f:
+            line = line.split(',')
+            charge = int(line[1])
+            name = line[0]
+
+            moldb[name] = {}
+            moldb[name]['charge'] = charge
+        f.close()
+
+        # Read the molecules from molecule list
+        molecules = [] # names
+        molecules_coordinates = [] # xyz
+        molecules_atoms = [] # atom type
+        molecules_charges = [] # charges
+
+        f = open(args.xyz_list, 'r')
+        for line in f:
+
+            line = line.replace("\n", "")
+            line = line.split()
+
+            atoms, coordinates = get_coordinates_xyz(__XYZDIR__ + line[0] + '.xyz')
+
+            molecules.append(line[0])
+            molecules_coordinates.append(coordinates)
+            molecules_atoms.append(atoms)
+            molecules_charges.append(moldb[line[0]]['charge'])
+
+        f.close()
+
+        # Create parameter list
+        parameters_list = []
+        parameter_range = np.arange(0.5, 3.1, 0.1)
+        parameters_scan_list = [1, 6]
+        parameters = np.zeros(len(parameters))
+
+        for pi in parameter_range:
+            for pj in parameter_range:
+                par = {}
+                par[1] = pi
+                par[6] = pj
+                parameters_list.append(par)
+
+        # number of molecules in list
+        n_molecules = len(molecules)
+
+        # workers per node
+        workers = 16
+
+        # split job list in chunks of
+        chunksize = 90
+
+        energies = get_energies_parameters_nodes(molecules_atoms, molecules_coordinates, molecules_charges,
+                header, parameters_list,
+                parameter_index_list=parameters_scan_list,
+                workers=workers,
+                chunksize=chunksize,
+                node_list=["node634", "node678", "node637", "node662"])
+
+        print "molecules", molecules
+
+        for i, par in enumerate(parameters_list):
+            print par[1], par[6], "#", list(energies[i])
+
+        quit()
+
+
+    if args.xyz_list and not args.scan:
+
+        # Read the molecules from molecule list
+        molecules = [] # names
+        molecules_coordinates = [] # xyz
+        molecules_atoms = [] # atom type
+        molecules_charges = [] # charges
+
+        f = open(args.xyz_list, 'r')
+        for line in f:
+
+            line = line.replace("\n", "")
+            line = line.split()
+
+            atoms, coordinates = get_coordinates_xyz(__XYZDIR__ + line[0] + '.xyz')
+
+            molecules.append(line[0])
+            molecules_coordinates.append(coordinates)
+            molecules_atoms.append(atoms)
+            molecules_charges.append(line[1])
+
+        f.close()
+
+        # number of molecules in list
+        n_molecules = len(molecules)
+
+        # workers per node
+        workers = 16
+
+        # split job list in chunks of
+        chunksize = 90
+
+        start_time = time()
+
+        energies = get_energies_nodes(molecules_atoms,
+                        molecules_coordinates,
+                        molecules_charges,
+                        header,
+                        parameters,
+                        workers=workers,
+                        chunksize=chunksize,
+                        # node_list=["node634"])
+                        # node_list=["node634", "node678"])
+                        node_list=["node634", "node678", "node637", "node662"])
+
+        endtime = time() - start_time
+
+        for i in xrange(n_molecules):
+            print molecules[i], energies[i]
+
+        print "time:", endtime
+
+
 if __name__ == "__main__":
+
+
+    main()
+
+
+
+
+
+
+    # legacy code
+
+    quit()
 
     import sys
 
@@ -358,17 +730,17 @@ if __name__ == "__main__":
 
  $pcm
     solvnt=WATER
- $end
 
+    ! Calculate the cavitation energy
+    ICAV=1
 
- $tescav
-    ! mthall=1
-    ! ntsall=60
+    ! Calculation of dispersion and repulsion free energy
+    IDISP=1
+
  $end
 
 """
 
-    start_time = time()
 
     # charge = 0
     # os.chdir(__)
@@ -376,15 +748,24 @@ if __name__ == "__main__":
 
     # energies = get_energies(molecules_atoms, molecules_coordinates, molecules_charges, header, parameters, workers=1)
 
-    energies = get_energies_nodes(molecules_atoms,
-                       molecules_coordinates,
-                       molecules_charges,
-                       header,
-                       parameters,
-                       workers=8,
-                       node_list=["node634", "node678", "node637", "node662"])
 
-    print energies
+    for chunksize in range(10, 210, 10):
 
-    print time() - start_time
+        start_time = time()
+
+        energies = get_energies_nodes(molecules_atoms,
+                        molecules_coordinates,
+                        molecules_charges,
+                        header,
+                        parameters,
+                        workers=16,
+                        chunksize=chunksize,
+                        # node_list=["node634"])
+                        # node_list=["node634", "node678"])
+                        node_list=["node634", "node678", "node637", "node662"])
+
+        endtime = time() - start_time
+
+        print chunksize, endtime
+
 

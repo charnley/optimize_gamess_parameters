@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 
-import sys
-import os
 import numpy as np
 import scipy.optimize as opt
 from copy import deepcopy
@@ -26,6 +24,23 @@ def rmsd(V, W):
 
 def main():
 
+    import argparse
+    import sys
+    import os
+
+    description = ""
+
+    parser = argparse.ArgumentParser(
+                    usage='%(prog)s [options]',
+                    description=description,
+                    formatter_class=argparse.RawDescriptionHelpFormatter)
+
+    parser.add_argument('-p', '--parameters', action='store', default='', help='parameter file')
+    parser.add_argument('-l', '--xyz_list', action='store', default='', help='list of molecules')
+    parser.add_argument('-d', '--reference', action='store', default='', help='Reference list')
+
+    args = parser.parse_args()
+
     try:
         # Is this run in a SLURM Enviroment?
         print os.environ["SLURM_JOB_ID"]
@@ -34,14 +49,9 @@ def main():
     except KeyError:
         pass
 
-    args = sys.argv[1:]
 
-    if len(args) == 0:
-        print "nope"
-        quit()
-
-    expe_values = args[0] # list of solvation free energies
-    exam_subset = args[1] # list of moleculenames
+    expe_values = args.reference
+    exam_subset = args.xyz_list # list of moleculenames
 
 
     # TODO load in all charges
@@ -90,6 +100,10 @@ def main():
 
     f.close()
 
+    molecules = np.array(molecules)
+    molecules_charges = np.array(molecules_charges)
+    molecules_references = np.array(molecules_references)
+
     # find unique atoms
     unique_atoms = np.unique(unique_atoms)
     unique_parameters = [gms.get_atom(atom) for atom in unique_atoms]
@@ -98,9 +112,19 @@ def main():
     unique_parameters -= 1 # convert from atom to index
     n_parameters = len(unique_parameters)
 
+    print "Optimizing atom types:", unique_parameters+1
+
+
     # start parameters
     parameters = np.zeros((n_atom_types))
-    parameters += 2.223 # Klamt default parameter
+
+    if args.parameters != "":
+        f = open(args.parameters, 'r')
+        for i, line in enumerate(f):
+            parameters[i] = float(line)
+
+    else:
+        parameters += 2.30 # Klamt default parameter
 
     # optimize parameters
     parameters_optimize = parameters[unique_parameters]
@@ -125,24 +149,17 @@ def main():
  $scf
     ! less output
     npunch=1
-
-    ! diis=.t.
  $end
 
  $pcm
     solvnt=WATER
- $end
-
-
- $tescav
-    ! mthall=1
-    ! ntsall=60
+    smd=.t.
  $end
 
 """
 
 
-    def energy_rmsd(parameter_view):
+    def energy_rmsd(parameter_view, verbose=True):
 
         # local = deepcopy(global) # 107
         # local[view] = parameter_optimize # 7
@@ -158,15 +175,29 @@ def main():
         #                    parameters_local, workers=30)
 
         energies = gms.get_energies_nodes(molecules_atoms,
-                           molecules_coordinates,
-                           molecules_charges,
-                           header,
-                           parameters_local)
+                        molecules_coordinates,
+                        molecules_charges,
+                        header,
+                        parameters_local,
+                        workers=16,
+                        chunksize=90,
+                        node_list=["node634", "node678", "node637", "node662"])
+
+        find_nan = np.argwhere(np.isnan(energies))
 
         energies = np.array(energies)
+
+        if len(find_nan) != 0 and verbose:
+            print find_nan
+            for nanidx in find_nan:
+                print "nan:", molecules[nanidx]
+                energies[nanidx] = molecules_references[nanidx]*1.5
+
         ermsd = rmsd(molecules_references, energies)
 
-        print "PARAM:", list(parameter_view), "RMSD:", ermsd
+        if verbose:
+            # TODO Add time
+            print "PARAM:", list(parameter_view), "RMSD:", ermsd
 
         return ermsd
 
@@ -196,34 +227,39 @@ def main():
 
         return gradient
 
+    def energy_jacobian_nodes(parameters, dx=0.001):
 
-    print energy_rmsd(parameters_optimize)
+
+        return
+
+
+    # print energy_rmsd(parameters_optimize)
     # print energy_jacobian(parameters_optimize)
-
+    #
     # All radii should be positive
     bounds = [(0.5, None) for _ in range(n_parameters)]
 
     # Methods
-    method_name = "L-BFGS-B"
-    # method_name = "Nelder-Mead"
-
     # method_name = "L-BFGS-B"
+    method_name = "Nelder-Mead"
+
     function_name = energy_rmsd
-    jacobian_function = energy_jacobian
+    # jacobian_function = energy_jacobian
 
     parameters_initial = deepcopy(parameters_optimize)
 
-    # print opt.minimize(function_name, parameters_initial,
-    #              method=method_name,
-    #              bounds=bounds,
-    #              options={"maxiter": 300, "disp": True, "eps": 0.001})
+    # For nelder-mead
+    print opt.minimize(function_name, parameters_initial,
+                 method=method_name,
+                 options={"maxiter": 300, "disp": True})
 
+    # for LBFGS
     # print opt.minimize(function_name, parameters_initial,
-    #              jac=jacobian_function,
+    #              # jac=jacobian_function,
     #              method=method_name,
     #              bounds=bounds,
-    #              options={"maxiter": 300, "disp": True, "eps": 0.001})
-    #
+    #              options={"maxiter": 300, "disp": True, "eps": 0.01})
+
     # print unique_parameters+1
 
 if __name__ == "__main__":

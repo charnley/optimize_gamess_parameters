@@ -1,5 +1,5 @@
 
-from multiprocessing.managers import BaseManager
+# from multiprocessing.managers import BaseManager
 from multiprocessing.managers import SyncManager
 
 import subprocess
@@ -16,7 +16,7 @@ import numpy as np
 
 __here__ = os.path.abspath(os.path.dirname(__file__))
 
-def make_server_manager(port, authkey):
+def make_server_manager(port, authkey, verbose=False):
 
     job_queue = Queue.Queue()
     result_queue = Queue.Queue()
@@ -30,7 +30,8 @@ def make_server_manager(port, authkey):
     manager = JobQueueManager(address=('', port), authkey=authkey)
     manager.start()
 
-    print 'Server started at port %s' % port
+    if verbose:
+        print 'Server started at port %s' % port
 
     return manager
 
@@ -65,7 +66,8 @@ def make_slave(slave, host, port, authkey,
 
     cmd = " ".join(cmd)
 
-    print cmd
+    if debug:
+        print cmd
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, shell=True)
