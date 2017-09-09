@@ -6,12 +6,14 @@ from copy import deepcopy
 import numpy.linalg as linalg
 
 import gamess as gms
+from shell import shell
 
 n_atom_types = 107
 
 
 __XYZDIR__ = "/home/charnley/dev/2017-mnsol-data/jobs/xyz/" # local
 __XYZDIR__ = "/home/charnley/dev/2017-mnsol/jobs/xyz/" # sunray
+__XYZDIR__ = "/home/charnley/dev/2017-mnsol/jobs/xyz-gamess-pm6" # sunray, pm6 gas
 
 
 def rmsd(V, W):
@@ -20,6 +22,28 @@ def rmsd(V, W):
     for v, w in zip(V, W):
         rmsd += (v - w)**2.0
     return np.sqrt(rmsd/N)
+
+
+def get_slurm_information():
+
+    import os
+
+    # Is this run in a SLURM Enviroment?
+    slurm_id = os.environ["SLURM_JOB_ID"]
+    slurm_nodes = os.environ["SLURM_JOB_NODELIST"]
+    slurm_nodes = shell('scontrol show hostname', shell=True)
+    slurm_workers = os.environ["SLURM_JOB_CPUS_PER_NODE"]
+
+    # clean up nodes
+    slurm_nodes = slurm_nodes.split("\n")
+    slurm_nodes = [node.strip() for node in slurm_nodes]
+    slurm_nodes = list(filter(None, slurm_nodes))
+
+    # Just need the ncpus
+    slurm_workers = slurm_workers.split('(')[0]
+    slurm_workers = int(slurm_workers)
+
+    return slurm_nodes, slurm_workers, slurm_id
 
 
 def main():
@@ -41,27 +65,27 @@ def main():
 
     args = parser.parse_args()
 
-    try:
-        # Is this run in a SLURM Enviroment?
-        print os.environ["SLURM_JOB_ID"]
-        print os.environ["SLURM_JOB_NODELIST"]
+    if os.environ["SLURM_JOB_ID"]:
+        nodes, workers, jobid = get_slurm_information()
+        print "Submitted to:", nodes, "on", workers, "workers. id:", jobid
 
-    except KeyError:
-        pass
+    else:
+        print "Could not find SLURM enviroment"
+        nodes = ["node634", "node678", "node637", "node662"]
+        workers = 16
+        chunksize = 90
+        quit()
 
 
     expe_values = args.reference
     exam_subset = args.xyz_list # list of moleculenames
 
-
-    # TODO load in all charges
-    # TODO load in experimental values (dict)
+    # load in all charges
+    # load in experimental values (dict)
     charges = {}
     references = {}
     f = open(expe_values, 'r')
-
     for line in f:
-
         line = line.split(";")
         charge = int(line[-2])
         solvation_energy = float(line[-1])
@@ -72,10 +96,8 @@ def main():
 
     f.close()
 
-    # TODO load in all XYZ files
-
+    # load in all XYZ files
     unique_atoms = []
-
     molecules = []
     molecules_coordinates = []
     molecules_atoms = []
@@ -113,7 +135,6 @@ def main():
     n_parameters = len(unique_parameters)
 
     print "Optimizing atom types:", unique_parameters+1
-
 
     # start parameters
     parameters = np.zeros((n_atom_types))
@@ -179,9 +200,9 @@ def main():
                         molecules_charges,
                         header,
                         parameters_local,
-                        workers=16,
-                        chunksize=90,
-                        node_list=["node634", "node678", "node637", "node662"])
+                        workers=workers,
+                        chunksize=chunksize,
+                        node_list=nodes)
 
         find_nan = np.argwhere(np.isnan(energies))
 

@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 
 # from multiprocessing.managers import BaseManager
 from multiprocessing.managers import SyncManager
