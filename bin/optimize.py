@@ -6,14 +6,17 @@ from copy import deepcopy
 import numpy.linalg as linalg
 
 import gamess as gms
+import nodes
 from shell import shell
+
+from time import time
 
 n_atom_types = 107
 
 
 __XYZDIR__ = "/home/charnley/dev/2017-mnsol-data/jobs/xyz/" # local
 __XYZDIR__ = "/home/charnley/dev/2017-mnsol/jobs/xyz/" # sunray
-__XYZDIR__ = "/home/charnley/dev/2017-mnsol/jobs/xyz-gamess-pm6" # sunray, pm6 gas
+__XYZDIR__ = "/home/charnley/dev/2017-mnsol/jobs/xyz-gamess-pm6/" # sunray, pm6 gas
 
 
 def rmsd(V, W):
@@ -22,28 +25,6 @@ def rmsd(V, W):
     for v, w in zip(V, W):
         rmsd += (v - w)**2.0
     return np.sqrt(rmsd/N)
-
-
-def get_slurm_information():
-
-    import os
-
-    # Is this run in a SLURM Enviroment?
-    slurm_id = os.environ["SLURM_JOB_ID"]
-    slurm_nodes = os.environ["SLURM_JOB_NODELIST"]
-    slurm_nodes = shell('scontrol show hostname', shell=True)
-    slurm_workers = os.environ["SLURM_JOB_CPUS_PER_NODE"]
-
-    # clean up nodes
-    slurm_nodes = slurm_nodes.split("\n")
-    slurm_nodes = [node.strip() for node in slurm_nodes]
-    slurm_nodes = list(filter(None, slurm_nodes))
-
-    # Just need the ncpus
-    slurm_workers = slurm_workers.split('(')[0]
-    slurm_workers = int(slurm_workers)
-
-    return slurm_nodes, slurm_workers, slurm_id
 
 
 def main():
@@ -59,25 +40,80 @@ def main():
                     description=description,
                     formatter_class=argparse.RawDescriptionHelpFormatter)
 
-    parser.add_argument('-p', '--parameters', action='store', default='', help='parameter file')
+    parser.add_argument('-p', '--parameters', action='store', nargs='+', default='', help='')
     parser.add_argument('-l', '--xyz_list', action='store', default='', help='list of molecules')
     parser.add_argument('-d', '--reference', action='store', default='', help='Reference list')
+    parser.add_argument('-e', '--header', action='store', default='', help='Header file')
+    parser.add_argument('-m', '--mask', action='store', default=None, nargs='+', type=str, help='Only use atoms from this subset')
+
+    parser.add_argument('-w', '--double_workers', action='store_true', default=False, help='Double the amount of workers (usefull for SQM methods)')
 
     args = parser.parse_args()
 
-    if os.environ["SLURM_JOB_ID"]:
-        nodes, workers, jobid = get_slurm_information()
-        print "Submitted to:", nodes, "on", workers, "workers. id:", jobid
-
-    else:
-        print "Could not find SLURM enviroment"
-        nodes = ["node634", "node678", "node637", "node662"]
-        workers = 16
+    try:
+        os.environ["SLURM_JOB_ID"]
+        nodelist, workers, jobid = nodes.get_slurm_information()
+        workers = 8
         chunksize = 90
-        quit()
 
+        print "Submitted to:", nodelist, "on", workers, "workers. id:", jobid
 
-    expe_values = args.reference
+    except KeyError:
+        nodelist = ["node634", "node678", "node637", "node662"]
+        workers = 8
+        chunksize = 90
+        print "Could not find SLURM enviroment", nodelist, "workers=",workers, "chunksize=",chunksize
+
+    if args.double_workers:
+        workers *= 2
+
+    slave_master = nodes.hostname()
+
+    # define gamess header
+    if args.header:
+        header_type = args.header.split("/")
+        header_type = header_type[-1]
+
+        print "header:", header_type
+
+        __XYZDIR__ = "/home/charnley/dev/2017-pcm-parameters/xyz/"+header_type+"/"
+        with open(args.header, 'r') as myfile:
+                header = myfile.read()
+    else:
+        header = """
+
+ $system
+   mwords=250
+ $end
+
+ $basis
+    gbasis=PM6
+ $end
+
+ $contrl
+    scftyp=RHF
+    icharg=0
+    runtyp=energy
+ $end
+
+ $scf
+    ! less output
+    npunch=1
+ $end
+
+ $pcm
+    solvnt=WATER
+    smd=.t.
+ $end
+
+"""
+
+    if args.reference:
+        expe_values = args.reference
+    else:
+        # Default value for sunray
+        expe_values = "/home/charnley/dev/2017-pcm-parameters/optimize_gamess_parameters/reference_water.csv"
+
     exam_subset = args.xyz_list # list of moleculenames
 
     # load in all charges
@@ -106,9 +142,13 @@ def main():
     f = open(exam_subset, 'r')
     for line in f:
         line = line.replace("\n", "")
-        molecules.append(line)
 
         atoms, coordinates = gms.get_coordinates_xyz(__XYZDIR__ + line + '.xyz')
+
+        # mask. sort out if masked is used
+        if args.mask:
+            if not set(np.unique(atoms)).issubset(args.mask):
+                continue
 
         molecules.append(line)
         molecules_coordinates.append(coordinates)
@@ -122,9 +162,16 @@ def main():
 
     f.close()
 
+
     molecules = np.array(molecules)
     molecules_charges = np.array(molecules_charges)
     molecules_references = np.array(molecules_references)
+
+    if args.mask:
+        print
+        print "using subset left from mask", args.mask
+        print molecules
+        print
 
     # find unique atoms
     unique_atoms = np.unique(unique_atoms)
@@ -139,52 +186,48 @@ def main():
     # start parameters
     parameters = np.zeros((n_atom_types))
 
-    if args.parameters != "":
-        f = open(args.parameters, 'r')
-        for i, line in enumerate(f):
-            parameters[i] = float(line)
+    if args.parameters:
+        parameters = np.zeros((107))
+        for parameter_file in args.parameters:
+            with open(parameter_file) as f:
+                parameter_content = f.read()
+                parameter_content = parameter_content.split("\n")
+                parameter_content = list(filter(None, parameter_content))
+
+                if ":" in parameter_content[0]:
+                    # Dictionary
+                    for line in parameter_content:
+                        line = line.split(":")
+                        idx = int(line[0])
+                        val = float(line[1])
+
+                        parameters[idx-1] = val
+
+                else:
+                    # just a plain list
+                    for i, line in enumerate(parameter_content):
+                        parameters[i] = float(line)
 
     else:
         parameters += 2.30 # Klamt default parameter
 
+
     # optimize parameters
     parameters_optimize = parameters[unique_parameters]
+    print "Starting from:", parameters_optimize
 
-    # define gamess header
-    header = """
-
- $system
-   mwords=250
- $end
-
- $basis
-    gbasis=PM6
- $end
-
- $contrl
-    scftyp=RHF
-    icharg=0
-    runtyp=energy
- $end
-
- $scf
-    ! less output
-    npunch=1
- $end
-
- $pcm
-    solvnt=WATER
-    smd=.t.
- $end
-
-"""
 
 
     def energy_rmsd(parameter_view, verbose=True):
 
+        if verbose:
+            start_time = time()
+
         # local = deepcopy(global) # 107
         # local[view] = parameter_optimize # 7
         # local med optimize # 107
+
+        parameter_view = [round(x, 2) for x in parameter_view]
 
         parameters_local = np.zeros((n_atom_types))
         parameters_local[unique_parameters] = parameter_view
@@ -202,7 +245,8 @@ def main():
                         parameters_local,
                         workers=workers,
                         chunksize=chunksize,
-                        node_list=nodes)
+                        node_list=nodelist,
+                        hostname=slave_master)
 
         find_nan = np.argwhere(np.isnan(energies))
 
@@ -217,8 +261,12 @@ def main():
         ermsd = rmsd(molecules_references, energies)
 
         if verbose:
-            # TODO Add time
-            print "PARAM:", list(parameter_view), "RMSD:", ermsd
+            endtime = time() - start_time
+            if ermsd > 20.0:
+                print "ENERGIES:", list(energies)
+                print "REFERENC:", list(molecules_references)
+
+            print "PARAM:", list(parameter_view), "RMSD:", ermsd, "TIME:", endtime
 
         return ermsd
 
@@ -262,6 +310,7 @@ def main():
 
     # Methods
     # method_name = "L-BFGS-B"
+    method_name = "Powell"
     method_name = "Nelder-Mead"
 
     function_name = energy_rmsd
@@ -273,6 +322,8 @@ def main():
     print opt.minimize(function_name, parameters_initial,
                  method=method_name,
                  options={"maxiter": 300, "disp": True})
+
+    # for powell
 
     # for LBFGS
     # print opt.minimize(function_name, parameters_initial,
