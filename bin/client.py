@@ -121,22 +121,37 @@ def start_client(job_queue, result_queue, stay_awake=False, workers=1):
     return
 
 
-def setup_client(directory):
+def setup_client(directory, gamessball="/home/charnley/opt/gamess/mndod-fast.tar.gz"):
     """
     Setup client
     """
 
-    gamess_path = directory + "/mndod-fast/rungms"
+    tarfile = gamessball.split("/")[-1]
+    gmsexe = tarfile.split('.')[0] + "/rungms "
+    rungms = directory + "/" + gmsexe
 
-    if not directory == "":
+    if not directory == "" or not directory == ".":
         os.chdir(directory)
 
     # check if gamess is already copied
-    if not os.path.exists(gamess_path):
-        print shell('cp /home/charnley/opt/gamess/mndod-fast.tar.gz .')
-        print shell('tar -xvf mndod-fast.tar.gz')
+    if not os.path.exists(tarfile):
+        print "GAMESS does not exists"
+        print shell('cp '+gamessball+' .')
+        print shell('tar -xvf '+tarfile)
 
-    gamess.__GAMESS__ = gamess_path
+    # check if gamess is correc tar
+    else:
+        print "gamess exists"
+        md5_here = shell("md5sum " + tarfile).split()[0]
+        md5_there = shell("md5sum " + gamessball).split()[0]
+
+        if md5_here != md5_there:
+            print "wrong version"
+            print shell('cp '+gamessball+' .')
+            print shell('tar -xvf '+tarfile)
+
+
+    gamess.__GAMESS__ = rungms
 
     return
 
@@ -164,6 +179,8 @@ def main():
 
     parser.add_argument('-t', '--test', action='store_true', help='Test the client setup (from nodes.py)')
 
+    parser.add_argument('-g', '--gamess', action='store', default='/home/charnley/opt/gamess/mndod-fast.tar.gz', help='tarball for gamess executable')
+
     args = parser.parse_args()
 
     hostname = socket.gethostname()
@@ -185,7 +202,7 @@ def main():
 
 
     # change directory and setup gamess locally
-    setup_client(args.dir)
+    setup_client(args.dir, gamessball=args.gamess)
     print shell('pwd')
 
     gamess.__SCRATCH__ = args.dir
