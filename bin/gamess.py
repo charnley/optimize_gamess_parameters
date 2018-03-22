@@ -62,7 +62,7 @@ __ATOM_LIST__ = [ x.strip() for x in ['h ','he', \
       'au','hg','tl','pb','bi','po','at','rn', \
       'fr','ra','ac','th','pa','u ','np','pu'] ]
 
-
+# TODO Remove
 def shell(cmd, shell=False):
 
     if shell:
