@@ -12,6 +12,8 @@ import socket
 
 import numpy as np
 
+from shell import shell
+
 # TODO Get hostnames
 # TODO Get how many cpu's per hostnames
 
@@ -29,6 +31,7 @@ def make_server_manager(port, authkey, verbose=False):
     JobQueueManager.register('get_result_queue', callable=lambda: result_queue)
 
     manager = JobQueueManager(address=('', port), authkey=authkey)
+
     manager.start()
 
     if verbose:
@@ -40,7 +43,9 @@ def make_server_manager(port, authkey, verbose=False):
 def make_slave(slave, host, port, authkey,
                directory="/scratch",
                workers=1,
-               debug=False):
+               debug=False,
+               verbose=False,
+               gamess_tar=''):
 
     """
 
@@ -57,8 +62,15 @@ def make_slave(slave, host, port, authkey,
 
     client += " --workers " + str(workers)
 
+    if gamess_tar != '':
+        client += " --gamess " + gamess_tar
+
     if debug:
         client += " --test"
+
+    pipe = True
+    if pipe:
+        client += " > /home/charnley/dev/2017-pcm-parameters/node_info/"+slave+".log " + " 2> /home/charnley/dev/2017-pcm-parameters/node_info/"+slave+".log"
 
     cmd = []
     cmd.append("ssh")
@@ -79,7 +91,8 @@ def make_slave(slave, host, port, authkey,
 def make_slaves(slaves, hostname, port, authkey,
                 directory="/scratch",
                 workers=1,
-                debug=False):
+                debug=False,
+                gamess_tar=''):
 
     procs = []
 
@@ -90,7 +103,8 @@ def make_slaves(slaves, hostname, port, authkey,
                                 authkey,
                                 directory=directory,
                                 workers=workers,
-                                debug=debug))
+                                debug=debug,
+                                gamess_tar=gamess_tar))
 
     return procs
 
@@ -104,6 +118,34 @@ def terminate(slaves):
     return
 
 
+def get_slurm_information():
+
+    # Is this run in a SLURM Enviroment?
+    slurm_id = os.environ["SLURM_JOB_ID"]
+    slurm_nodes = os.environ["SLURM_JOB_NODELIST"]
+    slurm_nodes = shell('scontrol show hostname', shell=True)
+    slurm_workers = os.environ["SLURM_JOB_CPUS_PER_NODE"]
+
+    # clean up nodes
+    slurm_nodes = slurm_nodes.split("\n")
+    slurm_nodes = [node.strip() for node in slurm_nodes]
+    slurm_nodes = list(filter(None, slurm_nodes))
+
+    # Just need the ncpus
+    slurm_workers = slurm_workers.split('(')[0]
+    slurm_workers = int(slurm_workers)
+
+    return slurm_nodes, slurm_workers, slurm_id
+
+
+def check_for_slurm():
+    return os.environ["SLURM_JOB_ID"] != ""
+
+
+def hostname():
+    return socket.gethostname()
+
+
 if __name__ == "__main__":
 
     """ Test the network communication is working
@@ -114,7 +156,13 @@ if __name__ == "__main__":
     hostname = socket.gethostname()
     node_list = ["node634", "node678"]
 
-    manager = make_server_manager(PORTNUM, AUTHKEY)
+    node_list, workers, jobid = get_slurm_information()
+
+    print "removing host from node_list", hostname, node_list
+    node_list.remove(hostname)
+    print "Testing on", node_list
+
+    manager = make_server_manager(PORTNUM, AUTHKEY, verbose=True)
     shared_jobs = manager.get_job_queue()
     shared_results = manager.get_result_queue()
 
@@ -127,7 +175,7 @@ if __name__ == "__main__":
         shared_jobs.put(nums[i:i + chunksize])
 
     # Start worker nodes
-    slaves = make_slaves(node_list, hostname, PORTNUM, AUTHKEY, debug=True)
+    slaves = make_slaves(node_list, hostname, PORTNUM, AUTHKEY, debug=True, directory="/scratch/"+jobid)
 
     # Make everything sync up
     time.sleep(5)
