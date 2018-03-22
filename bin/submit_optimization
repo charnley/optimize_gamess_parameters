@@ -1,0 +1,109 @@
+#!/bin/bash
+
+# Original work by Jan Jensen (https://github.com/jensengroup/molget).
+# Rewritten by Felipe Schneider.
+#
+#? molget 0.3
+#?
+#? Molget: bash script to get coordinates from chemical name using Cactus.
+#?
+#? Usage: molget chemical_name [chemical_name...]
+#?
+#?   -h         show this message
+#?   -v         show version
+#?   -s         assume chemical_name is a SMILES string
+#?   -o [TYPE]  selects an output file type supported by OpenBabel (defaults to
+#?              xyz)
+#?
+#? Examples:
+#?
+#?   ./molget methane
+#?   ./molget hexacyanoiron
+#?   ./molget water thf dmso dmf
+#?   ./molget "propylene carbonate"
+#?   ./molget -s "C(=O)N"
+#?   ./molget -s "C/C=C\C" "C/C=C/C"
+#?   ./molget -o gamin p-nitrobenzene
+#?   ./molget -o pdb nadh nad+
+#?   ./molget -o gamin -s "C#C"
+#?   (remember to "chmod 755 molget")
+
+if echo "$@" | grep -e "--help" > /dev/null
+then
+    grep "^#?" "$0" | cut -c 4-
+    exit 2
+fi
+
+FLAGS=""
+
+while [[ $# -gt 1 ]]
+do
+    key="$1"
+
+    case $key in
+
+        -j|--jobname)
+        jobname="$2"
+        shift;;
+
+        -h|--help)
+        ;;
+
+        *)
+        FLAGS="$FLAGS $1"
+        ;;
+    esac
+
+    shift # past argument or value
+done
+
+if test -z $jobname
+then
+    echo
+    echo "error"
+    echo "missing -j|--jobname"
+    echo
+    exit 4
+fi
+
+
+SUBMIT=qsub.tmp
+PWD=`pwd`
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+JOB=$jobname
+LOG=$PWD/$JOB.log
+
+# SLURM SETTINGS
+PARTITION=coms
+NCPUS=8
+NNODES=8
+TIME=336:00:00
+
+cat > $SUBMIT <<!EOF
+#!/bin/sh
+#SBATCH --job-name=$JOB
+#SBATCH --nodes=$NNODES
+#SBATCH --cpus-per-task=$NCPUS
+#SBATCH --ntasks=$NNODES
+#SBATCH --error=$PWD/$JOB\_%j.stderr
+#SBATCH --output=$PWD/$JOB\_%j.stdout
+#SBATCH --time=$TIME
+#SBATCH --partition=$PARTITION
+#SBATCH --no-requeue
+
+cd $PWD
+touch $LOG
+
+date > $LOG
+
+$DIR/optimize.py --reference /home/charnley/dev/2017-pcm-parameters/optimize_gamess_parameters/reference_water.csv $FLAGS  >> $LOG
+
+echo "" >> $LOG
+date >> $LOG
+
+!EOF
+
+sbatch $SUBMIT
+rm $SUBMIT
+
