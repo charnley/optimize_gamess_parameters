@@ -19,10 +19,10 @@ H   0.57775 1  0.11307 1  0.91843 1
 
     # fix charge
     if not charge == 0:
-        header = header.replace("CHARGE=0", "CHARGE="+str(charge))
+        header = header.replace("charge=0", "charge="+str(charge))
 
     # energy model
-    out += header +"\n"
+    out += header
 
     out += "title" + "\n"
     out += "\n"

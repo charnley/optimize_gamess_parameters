@@ -218,12 +218,14 @@ def main():
 
     if args.program_type == "gamess":
         make_input_file = gamess.make_input_file
+        ext = "inp"
     elif args.program_type == "mopac":
         make_input_file = mopac.make_input_file
+        ext = "mop"
 
     for job in jobs:
 
-        inpfile = str(job['id']) + ".inp"
+        inpfile = str(job['id']) + "." + ext
         atoms, coord = molecule_xyzs[job['file']]
         charge = job['charge']
         eps = job['eps']
