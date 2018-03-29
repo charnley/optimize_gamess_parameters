@@ -97,6 +97,7 @@ def get_full_database(filename):
     molecules = {}
     jobs = []
     molecule_names = []
+    solvents = {}
 
     for line in f:
         line = line.split()
@@ -116,9 +117,23 @@ def get_full_database(filename):
         molecule_names.append(line[fileid_idx])
         jobs.append(job)
 
+        # eps db
+        solvents[job['eps']] = job['solvent']
+
     molecule_names = np.unique(molecule_names)
 
-    return molecule_names, jobs
+    return solvents, molecule_names, jobs
+
+
+def print_result(jobs):
+
+    print "id, eps, charge, free"
+    for job in jobs:
+        print ", ".join([str(job['id']), str(job['eps']), str(job['charge']), job['file'], str(job['delta_g_solv'])])
+
+
+
+    return
 
 
 def main():
@@ -133,6 +148,7 @@ def main():
                     description=description,
                     formatter_class=argparse.RawDescriptionHelpFormatter)
 
+    parser.add_argument('-q', '--program_type', action='store', default="gamess", help='Input file program type')
 
     parser.add_argument('-p', '--parameters', action='store', nargs='+', default='', help='CSV file containing Radii information')
 
@@ -142,12 +158,15 @@ def main():
 
     parser.add_argument('-f', '--xyz_folder', action='store', default=False, help='Folder of gas optimized XYZ files')
 
+    parser.add_argument('-x', '--exam_results', action='store_true', default=False, help='Print the results')
+
     args = parser.parse_args()
 
 
     # Get header
-    with open(args.header, 'r') as f:
-        header = f.read()
+    if args.header:
+        with open(args.header, 'r') as f:
+            header = f.read()
 
 
     # Read radii parameters
@@ -178,7 +197,22 @@ def main():
 
 
     # Load mnsol database and XYZ structures
-    molecule_names, jobs = get_full_database(args.mnsoldb)
+    solvents, molecule_names, jobs = get_full_database(args.mnsoldb)
+
+    if args.exam_results:
+
+        # keys = solvents.keys()
+        # keys.sort()
+        #
+        # for key in keys:
+        #     print key, solvents[key]
+
+        print_result(jobs)
+
+
+        quit()
+
+
     molecule_xyzs = get_xyzs(molecule_names, args.xyz_folder)
 
     for job in jobs:
