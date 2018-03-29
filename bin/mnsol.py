@@ -4,6 +4,7 @@ import numpy as np
 import re
 
 import gamess
+import mopac
 
 def get_coordinates_xyz(filename):
     """
@@ -215,6 +216,11 @@ def main():
 
     molecule_xyzs = get_xyzs(molecule_names, args.xyz_folder)
 
+    if args.program_type == "gamess":
+        make_input_file = gamess.make_input_file
+    elif args.program_type == "mopac":
+        make_input_file = mopac.make_input_file
+
     for job in jobs:
 
         inpfile = str(job['id']) + ".inp"
@@ -227,7 +233,7 @@ def main():
         header_i = header.replace('REPLACEEPS', str(eps))
 
         with open(inpfile, 'w') as f:
-            f.write(gamess.make_input_file(atoms, coord, header_i, charge, parameters))
+            f.write(make_input_file(atoms, coord, header_i, charge, parameters))
 
 
 if __name__ == "__main__":
