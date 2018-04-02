@@ -79,6 +79,72 @@ def get_xyzs(name_list, opt_dir):
     return xyz_list
 
 
+
+def get_relative_jobs(filename, solvents, absjobs):
+
+    absdb = {}
+    for job in absjobs:
+
+        name = job['file']
+        solvent_name = job['solvent']
+        jobid = job['id']
+
+        print name
+
+        if name not in absdb.keys(): absdb[name] = {}
+
+        absdb[name][solvent_name] = jobid
+
+
+    f = open(filename)
+
+    header = f.next()
+    header = header.split()
+    n_cols = len(header)
+
+    no_idx = header.index("No.")
+    fileid_idx = header.index("FileHandle")
+    solvent_idx = header.index("Solvent")
+    type_idx = header.index("type")
+    charge_idx = header.index("Charge")
+    deltagsolv_idx = header.index("DeltaGsolv")
+    eps_idx = header.index("eps")
+
+    jobs = []
+    molecules = {}
+
+    for line in f:
+        line = line.split()
+
+        if line[type_idx] == "abs": continue
+
+        job = {}
+        job['id'] = int(line[no_idx])
+        job['file'] = line[fileid_idx]
+        job['solvent'] = line[solvent_idx].split("-")
+        job['delta_g_solv'] = float(line[deltagsolv_idx])
+        job['eps'] = float(line[eps_idx])
+        job['charge'] = int(line[charge_idx])
+
+        jobs.append(job)
+
+        print job['solvent'], job['file'], job['delta_g_solv'], job['id']
+
+        if job['file'] not in absdb.keys():
+            print job['file'], "no way"
+            continue
+
+        print absdb[job['file']]
+
+
+        quit()
+
+    quit()
+
+    return jobs
+
+
+
 def get_full_database(filename):
 
     f = open(filename)
@@ -96,14 +162,15 @@ def get_full_database(filename):
     eps_idx = header.index("eps")
 
     molecules = {}
-    jobs = []
+    abs_jobs = []
+    rel_jobs = []
     molecule_names = []
     solvents = {}
 
     for line in f:
         line = line.split()
 
-        if line[type_idx] != "abs": continue
+        isabs = line[type_idx] == "abs"
 
         job = {}
         job['id'] = int(line[no_idx])
@@ -116,14 +183,18 @@ def get_full_database(filename):
         # molecules[line[fileid_idx]] = int(line[charge_idx])
 
         molecule_names.append(line[fileid_idx])
-        jobs.append(job)
 
-        # eps db
-        solvents[job['eps']] = job['solvent']
+        if isabs:
+            abs_jobs.append(job)
+            # eps db
+            solvents[job['eps']] = job['solvent']
+        else:
+            rel_jobs.append(job)
+
 
     molecule_names = np.unique(molecule_names)
 
-    return solvents, molecule_names, jobs
+    return solvents, molecule_names, rel_jobs, abs_jobs
 
 
 def print_result(jobs):
@@ -198,7 +269,9 @@ def main():
 
 
     # Load mnsol database and XYZ structures
-    solvents, molecule_names, jobs = get_full_database(args.mnsoldb)
+    solvents, molecule_names, rel_jobs, abs_jobs = get_full_database(args.mnsoldb)
+
+    # relative_jobs = get_relative_jobs(args.mnsoldb, solvents, jobs)
 
     if args.exam_results:
 
@@ -223,7 +296,9 @@ def main():
         make_input_file = mopac.make_input_file
         ext = "mop"
 
-    for job in jobs:
+    for job in abs_jobs:
+
+        continue
 
         inpfile = str(job['id']) + "." + ext
         atoms, coord = molecule_xyzs[job['file']]
@@ -236,6 +311,21 @@ def main():
 
         with open(inpfile, 'w') as f:
             f.write(make_input_file(atoms, coord, header_i, charge, parameters))
+
+    for job in rel_jobs:
+
+        inpfile = str(job['id']) + ".inp"
+        atoms, coord = molecule_xyzs[job['file']]
+        charge = job['charge']
+        eps = job['eps']
+
+        print inpfile, eps, job['file']
+
+        header_i = header.replace('REPLACEEPS', str(eps))
+
+        # with open(inpfile, 'w') as f:
+        #     f.write(make_input_file(atoms, coord, header_i, charge, parameters))
+
 
 
 if __name__ == "__main__":
